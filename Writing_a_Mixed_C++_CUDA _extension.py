@@ -2,6 +2,55 @@
 ## that will be called from Python, and binds those functions to Python with pybind11
 ## Furthermore, this file will also declare functions that are defined in CUDA (.cu) files for forwarding and backwarding passes with custom CUDA kernels
 
+### writting lltm.py
+
+import math
+from torch import nn
+from torch.autograd import Function
+import torch
+
+import lltm_cuda
+
+torch.manual_seed(42)
+
+
+class LLTMFunction(Function):
+    @staticmethod
+    def forward(ctx, input, weights, bias, old_h, old_cell):
+        outputs = lltm_cuda.forward(input, weights, bias, old_h, old_cell)
+        new_h, new_cell = outputs[:2]
+        variables = outputs[1:] + [weights]
+        ctx.save_for_backward(*variables)
+
+        return new_h, new_cell
+
+    @staticmethod
+    def backward(ctx, grad_h, grad_cell):
+        outputs = lltm_cuda.backward(
+            grad_h.contiguous(), grad_cell.contiguous(), *ctx.saved_variables)
+        d_old_h, d_input, d_weights, d_bias, d_old_cell, d_gates = outputs
+        return d_input, d_weights, d_bias, d_old_h, d_old_cell
+
+
+class LLTM(nn.Module):
+    def __init__(self, input_features, state_size):
+        super(LLTM, self).__init__()
+        self.input_features = input_features
+        self.state_size = state_size
+        self.weights = nn.Parameter(
+            torch.Tensor(3 * state_size, input_features + state_size))
+        self.bias = nn.Parameter(torch.Tensor(1, 3 * state_size))
+        self.reset_parameters()
+
+    def reset_parameters(self):
+        stdv = 1.0 / math.sqrt(self.state_size)
+        for weight in self.parameters():
+            weight.data.uniform_(-stdv, +stdv)
+
+    def forward(self, input, state):
+        return LLTMFunction.apply(input, self.weights, self.bias, *state)
+
+
 ### writting lltm_cuda.cpp
 
 #include <torch/extension.h>
@@ -86,7 +135,7 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
 }
 
 
-## lltm_cuda_kernel.cu ## re-check below lines
+### lltm_cuda_kernel.cu 
 #include <torch/extension.h>
 
 #include <cuda.h>
@@ -119,7 +168,7 @@ __device__ __forceinline__ scalar_t d_elu(scalar_t z, scalar_t alpha = 1.0) {
   return d_relu + (((alpha * (e - 1.0)) < 0.0) ? (alpha * e) : 0.0);
 }
 
-# the actual CUDA Kernel
+### the actual CUDA Kernel
 template <typename scalar_t>
 __global__ void lltm_cuda_forward_kernel(
     const torch::PackedTensorAccessor<scalar_t,3,torch::RestrictPtrTraits,size_t> gates,
@@ -195,11 +244,11 @@ std::vector<torch::Tensor> lltm_cuda_forward(
   const int threads = 1024;
   const dim3 blocks((state_size + threads - 1) / threads, batch_size);
 
-  # The main point of interest here is the AT_DISPATCH_FLOATING_TYPES macro and the kernel launch (indicated by the <<<...>>>)
-  # AT_DISPATCH_FLOATING_TYPES is task care of dispatch. It tasks a type(below function, gates.type()), a name(for error messsages)
-  # and a lambda function. Inside this lambda function, the type alias scalar_t is available and defined as type the tensor
-  # template function is needed for scalr_t
-  # AT_DISPATCH_ALL_TYPES <-- apply lambda function all types
+  ### The main point of interest here is the AT_DISPATCH_FLOATING_TYPES macro and the kernel launch (indicated by the <<<...>>>)
+  ### AT_DISPATCH_FLOATING_TYPES is task care of dispatch. It tasks a type(below function, gates.type()), a name(for error messsages)
+  ### and a lambda function. Inside this lambda function, the type alias scalar_t is available and defined as type the tensor
+  ### template function is needed for scalr_t
+  ### AT_DISPATCH_ALL_TYPES <-- apply lambda function all types
   AT_DISPATCH_FLOATING_TYPES(gates.type(), "lltm_forward_cuda", ([&] {
     lltm_cuda_forward_kernel<scalar_t><<<blocks, threads>>>(
         gates.data<scalar_t>(),
@@ -270,3 +319,20 @@ switch (tensor.type().scalarType()) {
 }
 ####################################################
 
+
+
+### setup.py
+
+from setuptools import setup
+from torch.utils.cpp_extension import BuildExtension, CUDAExtension
+
+setup(
+    name='lltm',
+    ext_modules=[
+        CUDAExtension('lltm_cuda', [
+            'lltm_cuda.cpp',
+            'lltm_cuda_kernel.cu',
+        ])
+    ],
+    cmdclass = {
+        'build_ext':BuildExtension})
