@@ -139,6 +139,7 @@ std::vector<torch::Tensor> lltm_cuda_forward(
   const int threads = 1024;
   const dim3 blocks((state_size + threads - 1) / threads, batch_size);
 
+  # 
   AT_DISPATCH_FLOATING_TYPES(gates.type(), "lltm_forward_cuda", ([&] {
     lltm_cuda_forward_kernel<scalar_t><<<blocks, threads>>>(
         gates.data<scalar_t>(),
@@ -154,6 +155,8 @@ std::vector<torch::Tensor> lltm_cuda_forward(
   return {new_h, new_cell, input_gate, output_gate, candidate_cell, X, gates};
 }
 
+####################################################
+### Data type switch code
 switch (tensor.type().scalarType()) {
   case torch::ScalarType::Double:
     return function<double>(tensor.data<double>());
@@ -161,3 +164,5 @@ switch (tensor.type().scalarType()) {
     return function<float>(tensor.data<float>());
   ...
 }
+####################################################
+
