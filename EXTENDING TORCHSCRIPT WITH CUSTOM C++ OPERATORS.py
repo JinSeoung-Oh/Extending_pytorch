@@ -52,3 +52,62 @@ target_link_libraries(warp_perspective opencv_core opencv_imgproc)
 
 import torch
 torch.ops.load_library("build/libwarp_persepctive.so")
+print(torch.ops.my_ops.warp_perspective(torch.randn(32, 32), torch.rand(3, 3)))   # usage example
+
+### Using the Operator with Tracing
+def compute(x,y,z):
+  x = torch.ops.my_ops.warp_perspective(x, torch.eye(3))
+  return x.matmul(y) + torch.relu(z)
+
+inputs = [torch.randn(4,8), torch.randn(8,5), torch.randn(4,5)]
+trace = torch.jit.trace(compute, inputs) # it will forward to our implementation to record the sequence of operations that occur as the inputs flow through it
+print(trace.graph) # producing graph
+
+
+### Using Custom Operator with Script
+torch.ops.load_library("libwarp_perspective.so")
+
+@torch.jit.script
+def compute(x,y):
+  if bool(x[0][0] == 42):
+    z = 5
+  else:
+    z = 10
+  x = torch.ops.my_ops.warp_perspective(x, torch.eye(3))
+  return x.matmul(y) + z
+
+compute.graph
+
+
+### Using the TorchScript Custom Operator in C++
+### main.cpp
+
+#include <torch/script.h> // one-stop header
+#include <iostream>
+#include <memory>
+
+int main(int argc, const char*argv[]){
+  if (argc !=2){
+    std::cerr << "usage: example-app <path-to-exported-script-module>\n";
+    return -1;
+   }
+   torch::jit::script::Moudle module = torch.::jit::load(argv[1]);
+   std::vector<torch::jit::IValue> inputs;
+   inputs.push_back(torch::randn({4,8}));
+   inputs.push_back(torch::randn({8,5}));
+   torch::Tensor output = module.forward(std::move(inputs)).toTensor();
+
+   std::cout << output << std::endl;
+}
+
+
+### CmakeLists.txt
+cmake_minimum_required(VERSION 3.1 FATAL_ERROR)
+project(example_app)
+
+find_package(Torch REQUIRED)
+
+add_executable(example_app main.cpp)
+target_link_libraries(example_app "${TORCH_LIBRARIES}")
+target_compile_features(example_app PRIVATE cxx_range_for)
+
