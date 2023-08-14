@@ -111,3 +111,35 @@ add_executable(example_app main.cpp)
 target_link_libraries(example_app "${TORCH_LIBRARIES}")
 target_compile_features(example_app PRIVATE cxx_range_for)
 
+### build CmakeList file
+$ mkdir build
+$ cd build
+$ cmake -DCMAKE_PREFIX_PATH="$(python -c 'import torch.utils; print(torch.utils.cmake_prefix_path)')" ..
+
+### torch.ops.load
+
+import torch
+torch.ops.load_library("build/libwarp_perspective.so")
+
+### Using custom operator with Tracing
+
+def comput(x,y,z):
+  x = torch.ops.my_ops.warp_perspective(x, torch.eye(3))
+  return x.matmul(y) + torch.relu(z)
+
+inputs = [torch.randn(4,8), torch.randn(8,5), torch.randn(4,5)]
+trace = torch.jit.trace(compute, inputs)
+
+
+### using custom operator with script
+
+torch.ops.load_library("libwarp_perspective.so")
+@torch.jit.script
+def compute(x,y):
+  if bool(x[0] == 42):
+      z = 5
+  else:
+      z = 10
+  x = torch.ops.my_ops.warp_perspective(x, torch.eye(3))
+  return x.matmul(y) + z 
+
