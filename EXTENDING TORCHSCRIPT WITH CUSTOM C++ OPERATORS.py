@@ -130,7 +130,6 @@ def comput(x,y,z):
 inputs = [torch.randn(4,8), torch.randn(8,5), torch.randn(4,5)]
 trace = torch.jit.trace(compute, inputs)
 
-
 ### using custom operator with script
 
 torch.ops.load_library("libwarp_perspective.so")
@@ -143,3 +142,94 @@ def compute(x,y):
   x = torch.ops.my_ops.warp_perspective(x, torch.eye(3))
   return x.matmul(y) + z 
 
+compute.graph
+
+### using the torchscript custom operator in C++
+### main.cpp
+
+#include <torch/scripy.h>
+
+#include <iostream>
+#include <memory>
+
+int main(int argc, const char* argv[]){
+  if (argc != 2) {
+    std::cerr << "usage: example-app <path-to-exported-script-module>\n";
+    return -1;
+  }
+torch::jit::script::Module module = torch::jit::load(argv[1]);
+
+std::vector<torch::jit::IValue> inputs;
+inputs.push_back(torch::randn({4,8}));
+inputs.push_back(torch::randn({8,5}));
+
+torch::Tensor output = module.forward(std::move(inputs)).toTensor();
+
+std::cout << output << std::endl;
+}
+
+### CMakeLists.txt
+cmake_minimum_required(VERSION 3.1 FATAL_ERROR)
+project(example_app)
+find_package(Torch REQUIRED)
+add_excutable(example_app main.cpp)
+target_link_libraries(example_app "${TORCH_LIBRARIES}")
+target_compile_features(example_app PRIVATE cxx_range_for)
+
+### build cmake
+$ mkdir build
+$ cd build
+$ cmake -DCMAKE_PREFIX_PATH="$(python -c 'import torch.utils; print(torch.utils.cmake_prefix_path)')" ..
+
+### serialize the script function(custom operator)
+torch.ops.load_library("libwarp_perspective.so")
+
+@torch.jit.script
+def compute(x,y):
+  if bool(x[0][0] == 42):
+      z = 5
+  else:
+       z = 10
+  x = torch.ops.my_ops.warp_perspective(x, torch.eye(3))
+  return x.matmul(y)+z
+
+compute.save("example.pt")
+
+### usage
+$ ./example_app example.pt ### <-- not work (have to link!!)
+
+### folder structuer
+example_app/
+  CMakeLists.txt
+  main.cpp
+  warp_perspective/
+    CMakeLists.txt
+    op.cpp
+
+### CMakeLists.txt in the example_app folder
+cmake_minimum_required(VERSION 3.1 FATAL_ERROR)
+project(example_app)
+
+find_package(Torch REQUIRED)
+
+add_subdirectory(warp_perspective)
+
+add_executable(example_app main.cpp)
+target_link_libraries(example_app "${TORCH_LIBRARIES}")
+target_link_libraries(example_app -Wl,--no-as-needed warp_perspective)
+target_compile_features(example_app PRIVATE cxx_range_for)
+
+### CMakeLists.txt in the warp_perspective
+find_package(OpenCV REQUIRED)
+add_library(warp_perspective SHARED op.cpp)
+target_compile_features(warp_perspective PRIVATE cxx_range_for)
+target_link_libraries(warp_perspective PRIVATE "${TORCH_LIBRARIES}")
+target_link_libraries(warp_perspective PRIVATE opencv_core opencv_photo)
+
+### build
+$ mkdir build
+$ cd build
+$ cmake -DCMAKE_PREFIX_PATH="$(python -c 'import torch.utils; print(torch.utils.cmake_prefix_path)')" ..
+
+### usage
+$ ./example_app example.p
